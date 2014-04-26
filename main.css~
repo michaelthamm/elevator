@@ -1,0 +1,6 @@
+
+/* body {background-color:yellow;} */
+
+input[type=checkbox][disabled]{
+  outline:1px solid red; // or whatever
+}

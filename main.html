@@ -1,0 +1,353 @@
+<!DOCTYPE HTML>
+<html>
+<head>
+<meta content="text/html;charset=utf-8" http-equiv="Content-Type">
+<meta content="utf-8" http-equiv="encoding">
+<link rel="stylesheet" type="text/css" href="main.css">
+<script>
+/*
+Elevator object
+Doesen't care about the other elevators. Goes and does what it is TOLD to do based on the dispatchers command.
+Dispatcher sends commands to elevators - each elevator has command queues
+elevator level statuses - doors open or doors closed, moving or stopped, if moving direction 
+present position (floor + decimal, ex: 4.5 between floors)
+destination queue
+Each elevator will also have statistics - not sure if that is at the elevator or dispatcher
+Json object that represents the entire elevator system:
+...
+After every call the entire state of the elevator system is sent to the elevator optimizer. 
+This returns what elevator to send to the request. Each request has an id made up of build_id, floor_id
+Multiple requests will still only apply to one elevator system state. 
+The requests come as a list of json elements.
+The elevator system object contains the requests.
+JSON.stringify(
+*/
+// If all doors are open then status = idle, else active and view needs to be updated.
+var ELEVATORS = 4;
+var FLOORS = 15;
+var BOTTOMFLOOR = 0; //Could be negative for underground floors
+var LOOPSECS = 1; //Max time increment for a loop - just in case a loop stalls
+var SEPARATOR=":";
+var DOORSOPEN=7; //doors remain open for 7 secs
+var OPEN=1;
+var CLOSED=0;
+var STOPPED=0;
+var sysStatus = 0; // 0=idle, 1=active (elevators are moving) used to determine if we need to update the screen
+var callQueue = new Array();
+var elevatorQueue = new Array();
+var UP = 1;
+var DOWN = -1;
+var STOPPED = 0;
+
+function changeColor(elevator,floor,color){
+//  document.getElementById("row1").setAttribute("style", "background:red");
+//  1:2 Elevator Floor
+        var cell = elevator.toString().concat(":")+floor.toString();
+        if (document.getElementById(cell).getAttribute("style", "background:")=="background:".concat(color)){
+            return;
+         }
+         document.getElementById(cell).setAttribute("style", "background:".concat(color));
+}
+
+//Set up buttons and variables in the building
+//reqFlr(elevator:floor)
+function initialize(floors,elevators){
+     document.write("<table border='1' cellspacing='2' cellpadding='2'>");
+        //Rows+1 so that we have a cell for the floor check boxes
+      for (var i=floors+1;i>0;i--){ // Extra row for floor buttons
+         document.write("<tr id='row"+i.toString()+"'>");
+         for (var j=1;j<=elevators+1;j++) { //Need an extra column for button going backward so the top row is highest
+          
+            if (i<floors+1 && j==1){
+                   // This puts a button on each row in the first col
+                   document.write("<td>"+" <input type='button' onclick=callElevator("+i.toString()+") id="
+                    +i.toString()+" value='call'/></td>");  
+               }else{
+                if (i==floors+1 && j>1) { //first row not the first col - Draw the floor request buttons
+                    var flrBtnStr="<td width='200pt' name='flrBtns'>";
+                    for (var k=1;k<floors+1;k++){
+                        flrBtnStr=flrBtnStr.concat("<input type='button' onclick=elevatorQueuePush("
+                            +"'"+(j-2).toString()+SEPARATOR+k.toString()+"'); class='flrBtn' id='reqFlr"
+                            +(j-2).toString()+SEPARATOR+k.toString()+"' value='"+k.toString()+"' disabled ></input>");
+                        }
+                       flrBtnStr=flrBtnStr.concat("</td>");
+                       document.write(flrBtnStr);
+                 } else { //j-1 since the first col is the call button and the elevators are moved to the right 1 col
+                    document.write("<td width='80pt' id="+(j-2).toString()+SEPARATOR+i.toString()+">"+i.toString()+"</td>");
+                }
+            }
+         }
+        document.write("</tr>");
+        } 
+     document.write("</table>");
+}
+
+function updateWaitingFloor(floor) {
+
+}
+
+function randomFromTo(from, to){
+       return Math.floor(Math.random() * (to - from + 1) + from);
+    }
+
+function returnElevator(floor){
+    return randomFromTo(0,ELEVATORS-1) ; //For now just return a random elevator will be a call to the optimizer
+}
+
+function sign(number){
+    return number?number<0?-1:1:0;
+}
+
+function moveElevator(elevator,building) {
+var ftper=0;
+var direction=STOPPED;
+var incValue=0.0;
+var prevPos=0.0;
+var floorSpace=building.building.floorSpace;
+
+        ftper = building.building.elevators[elevator].ftperSec;
+        direction = building.building.elevators[elevator].direction;
+        incValue = 1/(sign(direction)*(floorSpace/ftper));
+        
+            if (building.building.elevators[elevator].position <= FLOORS && building.building.elevators[elevator].position >= BOTTOMFLOOR) {
+                 //update the position
+             if (direction!=STOPPED) {
+                 building.building.elevators[elevator].position += incValue;
+                 building.building.elevators[elevator].position = (Math.round(building.building.elevators[elevator].position*100))/100
+                if (direction>STOPPED){
+                    console.log("+++");
+                    console.log(building.building.elevators[elevator].position);
+                    console.log("+++");
+                }else {
+                    console.log("---");
+                    console.log(building.building.elevators[elevator].position);
+                    console.log("---");
+                }
+            }
+          }
+     }
+ 
+/* Restriction: 1 call to move elevators cannot be more than 1 sec. So, if something gets hung up, the next call occured at 
+ most 1 sec later. This will not allow the elevator to pass the floor due to a slow routine.
+ Since we know the position of the elevator and the direction we can update the position each pass.
+ If the position is "close" to a destination in the dest array, then stop and open doors. 
+ The number of clicks on that floor is the number of people getting off and the number of available space on the elevator. 
+ This routine only updates all of the elevator postion variables 
+*/
+
+function enableButtons(elevator){
+    var elevBtn = "reqFlr"; //reqFlr1:1
+    for (var j=1;j<=FLOORS;j++){
+        elevBtn = "reqFlr"+elevator.toString()+":"+j.toString();
+        document.getElementById(elevBtn).disabled=false; 
+    }
+}
+
+function disableButtons(elevator){
+    var elevBtn = "reqFlr"; //reqFlr1:1
+    for (var j=1;j<=FLOORS;j++){
+        elevBtn = "reqFlr"+elevator.toString()+":"+j.toString();
+        document.getElementById(elevBtn).disabled=true; 
+    }
+}
+
+function openDoors(elevator,building) {
+    if (building.building.elevators[elevator].doors==CLOSED){
+        console.log("Opening doors");
+        building.building.elevators[elevator].doors=OPEN;
+    }
+}
+
+function doorsStatus(elevator,building) {
+    return building.building.elevators[elevator].doors;
+}
+
+function closeDoors(elevator,building) {
+    console.log("Closing doors");
+    //building.building.elevators[elevator].doors=0;
+    //setTimeout(function() { building.building.elevators[elevator].doors=0; }, 5000);
+    changeColor(elevator,getEleFloor(elevator,building),"GREY");
+    setTimeout(function() { building.building.elevators[elevator].doors=0; }, 5000);
+    
+}
+
+function level(elevator,building){
+    console.log('Leveling....');
+    var colorInc = 245; //Not used
+    var direction = building.building.elevators[elevator].direction;
+    var distance = sign(direction)*Math.abs(building.building.elevators[elevator].position - building.building.elevators[elevator].DestQueue[0]);
+    while (Math.abs(distance)>.001){ // keep dividing the distance until it is with a range and then return the ceiling
+        distance = distance / 2;
+        building.building.elevators[elevator].position += distance;
+        console.log('Leveling....'.concat(building.building.elevators[elevator].position.toString()) ) ;
+    }
+    building.building.elevators[elevator].position=Math.round(building.building.elevators[elevator].position);
+}
+
+function stop(elevator,building){
+    console.log("**poping off**");
+    building.building.elevators[elevator].direction=STOPPED; //Stopping
+    if (building.building.elevators[elevator].DestQueue.length>0){
+        //console.log(building.building.elevators[elevator].DestQueue[0]);
+        building.building.elevators[elevator].DestQueue.shift()
+        //console.log(building.building.elevators[elevator].DestQueue[0]);
+    }
+}
+
+function setDirection(elevator,building) {
+           if (building.building.elevators[elevator].DestQueue.length==0){
+               building.building.elevators[elevator].direction=STOPPED; // Nothing in dest q so stop
+           }else {
+            if (Math.abs(building.building.elevators[elevator].position - building.building.elevators[elevator].DestQueue[0]) <= .5) {
+                //setTimeout(function() { level(elevator,building);  }, 1000);
+                level(elevator,building);
+                stop(elevator,building);
+            } else if((building.building.elevators[elevator].position - building.building.elevators[elevator].DestQueue[0]) < -.1){
+                console.log("**need to move up**");
+                building.building.elevators[elevator].direction=UP;
+              }else if ( (building.building.elevators[elevator].position - building.building.elevators[elevator].DestQueue[0]) > .1){
+                console.log("**need to move down**");
+                building.building.elevators[elevator].direction=DOWN;
+              }else {
+                //
+              }
+           }
+
+      return building.building.elevators[elevator].direction;
+}
+
+function getDirection(elevator,building) {
+        return building.building.elevators[elevator].direction;
+}
+
+function getEleFloor(elevator,building) {
+    return Math.floor(building.building.elevators[elevator].position);
+}
+
+function createBuilding(){
+var building = { 
+           "building": {
+           "id": 1,"floorSpace":30,
+           "elevators":[]
+      }  
+     };
+     //This builds the elevator objects
+     // floorspace/ftpperSec has to go into 10 evenly
+     for (var k=1;k<=ELEVATORS;k++) {
+        building.building.elevators.push({"id":k,"doors":0,"ftperSec":14,"capacity":6,"direction":0,"position":1.0,"DestQueue":[] });
+     }
+     
+     return building;
+
+}
+
+function checkForDest(elevator,building){
+    return (building.building.elevators[elevator].DestQueue.length>0)
+}
+
+function callElevator(floor) {
+    // If 1 is in the queue 5 times, then 5 people are waiting for the elevator
+    // Technically, No limit on the number of requests for the floor
+    callQueue.push(floor); //Floor Number
+    callQueue.sort(function(a,b){return a-b});
+    updateWaitingFloor(floor);
+}
+
+function elevatorQueuePush(req){
+    elevatorQueue.push(req);
+}
+
+function reqFlr(floor,building) {
+        //Individual elevator requests from within the elevator
+        //The buttons are referred as reqFlr11 = elevator 1 floor 1
+        //Should the number of entries 
+            var data = floor.split(SEPARATOR);
+            var elevator = Number(data[0]);
+            var flr = Number(data[1]);
+            // The array is 0 indexed while the elevator variable is 1 or 2
+            // Only allow the max capacity for the elevator times pushed.
+            if (building.building.elevators[elevator].DestQueue.length < building.building.elevators[elevator].capacity) {
+                console.log('Adding dest');
+                building.building.elevators[elevator].DestQueue.push(flr);
+            }
+        }
+
+// Objective was to keep the building object local
+// The call arrays are global
+function sortElevator(elevator,building){
+    if (building.building.elevators[elevator].direction == UP){
+    building.building.elevators[elevator].DestQueue.sort(function(a,b){return a-b});
+    } else {
+    building.building.elevators[elevator].DestQueue.sort(function(a,b){return b-a});
+    }
+}
+
+function dispatcher(building) {
+
+   //Need to check the queue while not blocking the ability to click on the buttons.
+   var floor = 0;
+   var elevator = 0;
+   var direction = 0;
+   var req="";
+   
+   while (callQueue.length>0 || elevatorQueue.length>0) { //Someone called
+            sysStatus=1;
+            if (callQueue.length>0) {
+                floor = callQueue.pop(); //Requested floor - checking for number of people (clicks) yet
+                elevator = returnElevator(floor,building); //Which elevator should be sent?
+                console.log("Sending elevator #: ".concat(elevator));
+                enableButtons(elevator);
+                reqFlr(elevator.toString()+SEPARATOR+floor.toString(),building); // We know the elevator to send and the dest floor
+            }
+            
+            if (elevatorQueue.length>0){
+                req = elevatorQueue.pop();
+                reqFlr(req,building);
+            }
+        } // At this point we made the request and put the requests on the appropriate elevators dest queue
+
+   
+   for (var j=0;j<ELEVATORS;j++) {
+       sortElevator(j,building);
+       changeColor(j,getEleFloor(j,building),"WHITE");
+        
+        if (setDirection(j,building)!=0) {
+
+            if (doorsStatus(j,building)==OPEN) {
+                closeDoors(j,building);
+            }
+            
+            if (doorsStatus(j,building)==CLOSED) { //Moving with closed doors
+               console.log('Moving....');
+               moveElevator(j,building);
+               changeColor(j,getEleFloor(j,building),"GREEN");
+           }
+        }   
+          else { //Stopped
+            changeColor(j,getEleFloor(j,building),'RGB(255,0,0)'); // Red
+            openDoors(j,building);
+            }
+          }
+           
+    setTimeout(function() { dispatcher(building); }, 500);
+
+}
+
+</script>
+</head>
+<body onload="dispatcher(createBuilding())">
+
+<div id="container" style="display: table;  margin: 0 auto;">
+
+<div id="header">
+
+<script>initialize(FLOORS,ELEVATORS);</script>
+
+</div> <!-- end header -->
+
+</div> <!-- end container -->
+
+</body>
+
+</html>
+
