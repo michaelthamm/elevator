@@ -42,7 +42,7 @@ var STOPPED = 0;
 function changeColor(elevator,floor,color){
 //  document.getElementById("row1").setAttribute("style", "background:red");
 //  1:2 Elevator Floor
-        var cell = elevator.toString().concat(":")+floor.toString();
+        var cell = elevator.toString().concat(SEPARATOR)+floor.toString();
         if (document.getElementById(cell).getAttribute("style", "background:")=="background:".concat(color)){
             return;
          }
@@ -138,7 +138,7 @@ var floorSpace=building.building.floorSpace;
 function enableButtons(elevator){
     var elevBtn = "reqFlr"; //reqFlr1:1
     for (var j=1;j<=FLOORS;j++){
-        elevBtn = "reqFlr"+elevator.toString()+":"+j.toString();
+        elevBtn = "reqFlr"+elevator.toString()+SEPARATOR+j.toString();
         document.getElementById(elevBtn).disabled=false; 
     }
 }
@@ -146,7 +146,7 @@ function enableButtons(elevator){
 function disableButtons(elevator){
     var elevBtn = "reqFlr"; //reqFlr1:1
     for (var j=1;j<=FLOORS;j++){
-        elevBtn = "reqFlr"+elevator.toString()+":"+j.toString();
+        elevBtn = "reqFlr"+elevator.toString()+SEPARATOR+j.toString();
         document.getElementById(elevBtn).disabled=true; 
     }
 }
@@ -248,6 +248,14 @@ function checkForDest(elevator,building){
 function callElevator(floor) {
     // If 1 is in the queue 5 times, then 5 people are waiting for the elevator
     // Technically, No limit on the number of requests for the floor
+    /* The next step is to associate people and timers to the request.
+       The person will be created 
+       The floor requested will be assigned to the person
+       timer initialized
+       When the elevator arrives, the person object will be added to the riders queue (array)
+       We now need to check for max riders and pop them off at the appropriate floor
+       Update display with the number of presses of the call button
+     */
     callQueue.push(floor); //Floor Number
     callQueue.sort(function(a,b){return a-b});
     updateWaitingFloor(floor);
