@@ -2,5 +2,5 @@
 /* body {background-color:yellow;} */
 
 input[type=checkbox][disabled]{
-  color:#dddddd; // or whatever
+  color:#dddddd;
 }
